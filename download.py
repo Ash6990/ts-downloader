@@ -10,6 +10,7 @@ To use it:
 - run the script: `python3 ts_downloader.py -o FILE.mp4 "URL_WITH_COUNTER"`
 
 Bruno Oberle - 2002
+Updated with User-Agent spoofing and empty-file checks.
 """
 
 import argparse
@@ -17,7 +18,7 @@ import os
 import subprocess
 import tempfile
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 def download(template_url):
@@ -33,17 +34,35 @@ def download(template_url):
     """
     binary_content = b""
     counter = 1
+    
+    # Masquerade as a normal web browser to avoid getting blocked by the CDN
+    # Masquerade as a normal web browser and provide the Origin
+    headers = {
+        'User-Agent': 'type whatever agent you want to use',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'link of the origin ',
+        'Referer': 'link of the referer'
+    }
+
     while True:
         url = template_url.format(counter=counter)
         print(f"Reading {url}")
         try:
-            u = urlopen(url)
-        except URLError:
-            print("Error encountered, quiting downloading")
+            req = Request(url, headers=headers)
+            u = urlopen(req)
+        except URLError as e:
+            # e.reason is sometimes absent, so we use getattr as a safe fallback
+            reason = getattr(e, 'reason', e)
+            print(f"Stop condition met (or error): {reason}. Quitting downloading.")
+            break
+        except Exception as e:
+            print(f"Unexpected error: {e}. Quitting downloading.")
             break
         else:
             binary_content += u.read()
             counter += 1
+            
     return binary_content
 
 
@@ -78,7 +97,19 @@ def parse_args():
 def main():
     args = parse_args()
     template_url = args.url_template
+    
+    # Check if {counter} is actually in the URL
+    if "{counter" not in template_url:
+        print("\nERROR: Your URL must contain the '{counter}' placeholder.")
+        return
+
     content = download(template_url)
+    
+    # Prevent ffmpeg from crashing on an empty file
+    if not content:
+        print("\nERROR: No data was downloaded. Check your URL or network connection.\n")
+        return
+
     with tempfile.TemporaryDirectory() as tempdir:
         ts_path = os.path.join(tempdir, "concat.ts")
         with open(ts_path, 'wb') as fh:
